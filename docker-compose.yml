@@ -1,0 +1,110 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: inference-postgres-compose
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: inference_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d inference_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7
+    container_name: inference-redis-compose
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: .
+    container_name: inference-api
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/inference_db
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_QUEUE_NAME: inference_jobs
+      MAX_RETRIES: 3
+      THREADS_PER_WORKER: 4
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: >
+      sh -c "python scripts/create_tables.py &&
+             python scripts/train_dummy_model.py &&
+             python -m uvicorn app.main:app --host 0.0.0.0 --port 8000"
+
+  worker1:
+    build: .
+    container_name: inference-worker-1
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/inference_db
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_QUEUE_NAME: inference_jobs
+      MAX_RETRIES: 3
+      THREADS_PER_WORKER: 4
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: >
+      sh -c "python scripts/train_dummy_model.py &&
+            python -u scripts/run_worker.py"
+
+  worker2:
+    build: .
+    container_name: inference-worker-2
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/inference_db
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_QUEUE_NAME: inference_jobs
+      MAX_RETRIES: 3
+      THREADS_PER_WORKER: 4
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: >
+      sh -c "python scripts/train_dummy_model.py &&
+            python -u scripts/run_worker.py"
+
+  worker3:
+    build: .
+    container_name: inference-worker-3
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/inference_db
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_QUEUE_NAME: inference_jobs
+      MAX_RETRIES: 3
+      THREADS_PER_WORKER: 4
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: >
+      sh -c "python scripts/train_dummy_model.py &&
+            python -u scripts/run_worker.py"
+
+volumes:
+  postgres_data:
