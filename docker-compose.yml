@@ -48,6 +48,19 @@ services:
       sh -c "python scripts/create_tables.py &&
              python scripts/train_dummy_model.py &&
              python -m uvicorn app.main:app --host 0.0.0.0 --port 8000"
+  dashboard:
+    build: .
+    container_name: inference-dashboard
+    environment:
+      API_BASE_URL: http://api:8000
+    ports:
+      - "8501:8501"
+    depends_on:
+      - api
+    command: >
+      streamlit run dashboard/streamlit_app.py
+      --server.address=0.0.0.0
+      --server.port=8501
 
   worker1:
     build: .
