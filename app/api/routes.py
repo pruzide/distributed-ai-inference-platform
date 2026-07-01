@@ -124,6 +124,7 @@ from app.db.database import SessionLocal
 from app.db.job_repository import JobRepository
 from app.core.job_manager import JobManager
 from app.core.queue_client import QueueClient
+from app.metrics.metrics_tracker import MetricsTracker
 
 
 router = APIRouter()
@@ -191,3 +192,15 @@ def get_job(job_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Job not found")
 
     return job
+
+
+@router.get("/metrics/summary")
+def get_metrics_summary(window_minutes: int = 10, db: Session = Depends(get_db)):
+    metrics_tracker = MetricsTracker(db)
+    return metrics_tracker.get_summary(window_minutes=window_minutes)
+
+
+@router.get("/metrics/recent-jobs")
+def get_recent_jobs(limit: int = 20, db: Session = Depends(get_db)):
+    metrics_tracker = MetricsTracker(db)
+    return metrics_tracker.get_recent_jobs(limit=limit)
