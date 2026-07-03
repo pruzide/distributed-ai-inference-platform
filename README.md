@@ -1,33 +1,28 @@
 # Distributed AI Inference & Job Scheduling Platform
 
-A Dockerized backend system for running ML inference jobs asynchronously using FastAPI, Redis, PostgreSQL, distributed workers, retries, and monitoring.
+A backend-first ML inference platform that processes prediction jobs asynchronously using FastAPI, Redis, PostgreSQL, Docker workers, retries, and monitoring.
 
-This project focuses on the software engineering layer around AI inference — not model accuracy.  
-It answers a practical question: **what happens after a model is ready and prediction requests need to be processed reliably at scale?**
+This project isn't about building the best ML model — it's about building the system around the model: job submission, queueing, worker execution, failure handling, state tracking, and observability.
 
 ---
 
 ## Why this project exists
 
-Most ML demos stop at:
+A simple ML demo usually looks like this:
 
 ```text
-input → model → prediction
+request → model → prediction
 ```
 
-Real systems need more:
+That's not how real inference systems operate under load.
+
+This project was built to handle the backend problems that appear once prediction requests need to be processed reliably:
 
 ```text
-request → queue → worker → retry → state tracking → monitoring → debugging
+request → job creation → queue → workers → retry → database state → metrics
 ```
 
-I built this project to understand the backend problems behind production AI systems:
-
-- how to avoid blocking the API during inference
-- how to queue prediction jobs safely
-- how multiple workers coordinate around shared work
-- how failed jobs are retried and tracked
-- how system health, latency, retries, and failures are monitored
+The goal was to design a small but realistic inference backend where API requests don't block, workers process jobs independently, failures are tracked, and system behavior is visible through metrics.
 
 ---
 
@@ -35,62 +30,54 @@ I built this project to understand the backend problems behind production AI sys
 
 ![Architecture Overview](./docs/screenshots/architecture_overview.png)
 
-FastAPI accepts inference jobs. PostgreSQL stores durable job state. Redis stores lightweight job IDs for workers to consume. Dockerized workers process jobs asynchronously. Streamlit reads metrics from the API and visualizes system behavior.
+FastAPI accepts prediction jobs. PostgreSQL stores the durable job state. Redis stores lightweight job IDs for workers to consume. Dockerized workers process inference jobs asynchronously. Streamlit displays system metrics from the API.
 
 ---
 
-## What I built
+## What's implemented
 
-- FastAPI REST backend for submitting and tracking inference jobs
+- FastAPI REST API for submitting and tracking inference jobs
 - Redis queue for asynchronous job dispatch
-- PostgreSQL-backed job state tracking with SQLAlchemy
+- PostgreSQL job tracking with SQLAlchemy
 - 3 Dockerized worker services
 - 4 threads per worker using `ThreadPoolExecutor`
 - 12 total concurrent worker threads
 - Retry handling with up to 3 attempts for failed jobs
-- scikit-learn dummy credit-risk-style inference model
-- Streamlit dashboard for recent jobs and system metrics
+- scikit-learn inference model
+- Streamlit monitoring dashboard
 - Docker Compose setup for API, Redis, PostgreSQL, workers, and dashboard
+- Load test with 1,000+ submitted jobs reaching terminal state
 
 ---
 
-## Core engineering decisions
+## System behavior
 
-### Redis is used for dispatch, not storage
-
-Redis stores only job IDs.
-
-The full job payload, result, status, retry count, error message, and latency are stored in PostgreSQL. This keeps Redis lightweight and makes PostgreSQL the source of truth.
-
-```text
-Redis      → fast queue
-PostgreSQL → durable job state
-```
-
-### Inference is processed asynchronously
-
-The API does not run inference inside the request cycle.
-
-A request creates a job, stores it in PostgreSQL, pushes the job ID to Redis, and returns immediately. Workers pick jobs from Redis and update PostgreSQL as jobs move through their lifecycle.
+### Job lifecycle
 
 ```text
 queued → processing → completed
                   ↘ failed
 ```
 
-### Workers are distributed and threaded
+A job is first saved in PostgreSQL. Only the job ID is pushed to Redis. Workers consume job IDs from Redis, fetch job details from PostgreSQL, run inference, and update the final status.
 
-The system runs 3 worker services, each with 4 threads.
+Redis handles queue dispatch. PostgreSQL is the source of truth.
+
+---
+
+### Worker concurrency
 
 ```text
-3 workers × 4 threads = 12 concurrent worker threads
+3 worker services × 4 threads per worker = 12 concurrent worker threads
 ```
 
-This demonstrates both service-level concurrency and thread-level concurrency.
+Each worker runs as a separate Docker service and consumes jobs from the same Redis queue.
 
-### Failed jobs are retried, not lost
+---
 
-A bad job is retried up to 3 times. After that, it is marked permanently failed with the error message saved in PostgreSQL.
+### Retry handling
+
+Failed jobs are retried up to 3 times. After the retry limit is reached, the job is permanently marked as failed in PostgreSQL, along with the error message.
 
 Verified failed-job example:
 
@@ -104,13 +91,15 @@ error_message : Expected 5 features, got 2
 
 ## Local validation
 
-Verified local run:
+The platform was verified locally through Docker Compose.
+
+Sample metrics from a verified run:
 
 ```text
 total_jobs                 : 41
 completed_jobs             : 40
 failed_jobs                : 1
-total_retries              : 3
+total_retries               : 3
 average_latency_ms         : 18.77
 max_latency_ms             : 48.55
 throughput_jobs_per_minute : 2.0
@@ -118,57 +107,49 @@ success_rate_percent       : 97.56
 failure_rate_percent       : 2.44
 ```
 
-This confirms that the API, queue, workers, retry flow, database tracking, and metrics dashboard work end-to-end in Docker Compose.
+The 1,000+ job load test also completed successfully, with all submitted jobs reaching terminal state.
+
+Proof:
+
+- [Docker services](docs/proof/01-docker-services.txt)
+- [API health](docs/proof/02-api-health.json)
+- [Redis queue health](docs/proof/03-queue-health.json)
+- [Job submission](docs/proof/04-submit-job.json)
+- [Completed job](docs/proof/05-completed-job.json)
+- [Failed job retry](docs/proof/07-failed-job-retry.json)
+- [Metrics summary](docs/proof/08-metrics-summary.json)
+- [Recent jobs](docs/proof/09-recent-jobs.json)
+- [Worker logs](docs/proof/10-worker1-logs.txt)
+- [PostgreSQL job counts](docs/proof/13-postgres-status-count.txt)
+- [Failed jobs in PostgreSQL](docs/proof/14-postgres-failed-jobs.txt)
+- [Completed jobs in PostgreSQL](docs/proof/15-postgres-completed-jobs.txt)
+- [1,000+ load test output](docs/proof/16-load-test-output.txt)
+- [Dashboard screenshot](docs/screenshots/02-streamlit-dashboard.png)
 
 ---
 
 ## API endpoints
 
-| Method | Endpoint | Purpose |
+| Method | Endpoint | Description |
 | --- | --- | --- |
 | `GET` | `/health` | API health check |
 | `GET` | `/queue/health` | Redis queue health check |
-| `POST` | `/jobs` | Submit inference job |
-| `GET` | `/jobs/{job_id}` | Check job status/result |
+| `POST` | `/jobs` | Submit prediction job |
+| `GET` | `/jobs/{job_id}` | Get job status and result |
 | `GET` | `/metrics/summary` | System metrics summary |
 | `GET` | `/metrics/recent-jobs` | Recent job history |
 
 ---
 
-## Proof of work
+## Tech stack
 
-| Area | Evidence |
-| --- | --- |
-| Docker services | [`01-docker-services.txt`](docs/proof/01-docker-services.txt) |
-| API health | [`02-api-health.json`](docs/proof/02-api-health.json) |
-| Redis queue health | [`03-queue-health.json`](docs/proof/03-queue-health.json) |
-| Job submission | [`04-submit-job.json`](docs/proof/04-submit-job.json) |
-| Completed job | [`05-completed-job.json`](docs/proof/05-completed-job.json) |
-| Failed job retry | [`07-failed-job-retry.json`](docs/proof/07-failed-job-retry.json) |
-| Metrics summary | [`08-metrics-summary.json`](docs/proof/08-metrics-summary.json) |
-| Recent jobs | [`09-recent-jobs.json`](docs/proof/09-recent-jobs.json) |
-| Worker logs | [`worker1`](docs/proof/10-worker1-logs.txt), [`worker2`](docs/proof/11-worker2-logs.txt), [`worker3`](docs/proof/12-worker3-logs.txt) |
-| PostgreSQL schema | [`12-postgres-schema.txt`](docs/proof/12-postgres-schema.txt) |
-| PostgreSQL job counts | [`13-postgres-status-count.txt`](docs/proof/13-postgres-status-count.txt) |
-| Failed jobs in PostgreSQL | [`14-postgres-failed-jobs.txt`](docs/proof/14-postgres-failed-jobs.txt) |
-| Completed jobs in PostgreSQL | [`15-postgres-completed-jobs.txt`](docs/proof/15-postgres-completed-jobs.txt) |
-| Dashboard | [`Streamlit screenshot`](docs/screenshots/02-streamlit-dashboard.png) |
-
-The 1,000+ job load test is intentionally not claimed until the script prints:
-
-```text
-RESULT: PASS - 1,000+ submitted jobs reached terminal state.
-```
-
-Current load-test proof:
-
-[`16-load-test-output.txt`](docs/proof/16-load-test-output.txt)
+Python, FastAPI, Redis, PostgreSQL, SQLAlchemy, scikit-learn, Streamlit, Docker, Docker Compose, ThreadPoolExecutor
 
 ---
 
 ## Run locally
 
-Start the platform:
+Start all services:
 
 ```bash
 docker compose up --build
@@ -235,28 +216,11 @@ Run load test:
 python -u scripts/load_test.py 2>&1 | Tee-Object docs/proof/16-load-test-output.txt
 ```
 
----
+Expected successful load-test output:
 
-## Tech stack
-
-Python, FastAPI, Redis, PostgreSQL, SQLAlchemy, scikit-learn, Streamlit, Docker, Docker Compose, ThreadPoolExecutor
-
----
-
-## What I would improve next
-
-- authentication and authorization
-- rate limiting
-- Alembic migrations
-- structured logging
-- Prometheus/Grafana dashboards
-- OpenTelemetry tracing
-- exponential backoff retries
-- dead-letter queue
-- model versioning and registry
-- CI/CD pipeline
-- Kubernetes deployment
-- autoscaling workers based on Redis queue length
+```text
+RESULT: PASS - 1,000+ submitted jobs reached terminal state.
+```
 
 ---
 
@@ -282,3 +246,13 @@ distributed-ai-inference-platform/
 ├── requirements.txt
 └── README.md
 ```
+
+---
+
+## Next improvements
+
+- Add authentication and rate limiting
+- Add structured logs and tracing
+- Add a dead-letter queue for permanently failed jobs
+- Add model versioning
+- Deploy workers with autoscaling
